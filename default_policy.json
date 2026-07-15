@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "default": "allow",
+  "rules": [
+    {"id": "no_insecure_tls", "effect": "deny",
+     "when": {"arg_matches": "(?i)verify\\W{0,3}false|cert_none|check_hostname\\W{0,3}false|--insecure|disable_warnings"},
+     "reason": "disabling TLS verification is forbidden"},
+    {"id": "sandbox_only", "effect": "deny",
+     "when": {"arg_matches": "(^\\.\\.)|(\\.\\.[\\\\/])|(^[A-Za-z]:[\\\\/])|(^/)"},
+     "reason": "path escapes the agent sandbox"},
+    {"id": "no_secret_exfil", "effect": "deny",
+     "when": {"arg_matches": "(?i)private.?key|mnemonic|seed.?phrase|begin (ec |rsa |openssh )?private key"},
+     "reason": "action references secret material"},
+    {"id": "spend_cap", "effect": "deny",
+     "when": {"tool": "spend", "arg_gt": {"field": "amount", "limit": 100}},
+     "reason": "spend exceeds the $100 clearance limit"}
+  ]
+}
