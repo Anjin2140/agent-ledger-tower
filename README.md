@@ -37,8 +37,9 @@ This is the normal path if you want to use the work rather than run a technical
 proof. Open PowerShell and paste:
 
 ```powershell
-# On this machine; otherwise use the folder that contains this release.
-cd "C:\RegimeOS\release\agent-ledger-tower-v5"
+# clone the repo, then start the tower from inside it
+git clone https://github.com/Anjin2140/agent-ledger-tower
+cd agent-ledger-tower
 powershell -ExecutionPolicy Bypass -File start_tower.ps1
 ```
 
