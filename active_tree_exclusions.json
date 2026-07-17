@@ -1,0 +1,75 @@
+{
+  "schema": "agent-ledger-tower-active-exclusions-v1",
+  "exclusions": [
+    {
+      "kind": "directory",
+      "path": "agent_work",
+      "reason": "Per-run worker workspaces are generated runtime state."
+    },
+    {
+      "kind": "directory",
+      "path": "evidence_packets",
+      "reason": "Evidence snapshots are private generated state, not source."
+    },
+    {
+      "kind": "directory",
+      "path": "fleet",
+      "reason": "Fleet ledgers and workspaces are generated demonstration state."
+    },
+    {
+      "kind": "directory",
+      "path": "xrt_verify/bin",
+      "reason": ".NET build output is generated and reproducible."
+    },
+    {
+      "kind": "directory",
+      "path": "xrt_verify/obj",
+      "reason": ".NET intermediate output is generated and reproducible."
+    },
+    {
+      "kind": "directory",
+      "path": "Agent Control Tower",
+      "reason": "Duplicate administrative folder outside the canonical package."
+    },
+    {
+      "kind": "file",
+      "path": "AGENTS.md",
+      "reason": "Workspace instructions are not product source or release content."
+    },
+    {
+      "kind": "file",
+      "path": "RELEASE_MANIFEST.json",
+      "reason": "The standalone exporter generates this integrity metadata after copying the reviewed files."
+    },
+    {
+      "kind": "suffix",
+      "path": "*.jsonl",
+      "reason": "Local action traces are generated runtime state."
+    },
+    {
+      "kind": "suffix",
+      "path": "*.log",
+      "reason": "Local logs are generated runtime state."
+    },
+    {
+      "kind": "suffix",
+      "path": "*.sqlite3",
+      "reason": "Local retrieval databases are generated private state."
+    },
+    {
+      "kind": "suffix",
+      "path": "*.pyc",
+      "reason": "Python bytecode is generated output."
+    },
+    {
+      "kind": "directory",
+      "path": ".pytest_cache",
+      "reason": "Pytest cache is generated test state."
+    },
+    {
+      "kind": "directory",
+      "path": "sandbox_jail",
+      "reason": "Sandbox demo per-run workspace is generated runtime state."
+    }
+  ]
+}

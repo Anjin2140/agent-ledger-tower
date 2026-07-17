@@ -3,37 +3,33 @@
 agent_loop.py — a REAL agent loop whose every action is recorded into the
 deterministic, tamper-evident ledger.
 
-The model is called through Google's Gemini REST API using only the Python
-standard library (urllib + ssl + json) — no third-party packages to install,
-which sidesteps the litellm/Rust build problem entirely. If a key or network
-is absent, it falls back to a deterministic MOCK model so the loop + ledger
-still run offline and prove the mechanics.
+The model is called through Google's Gemini REST API using the Python standard
+library. On Windows, a narrowly allowlisted PowerShell helper can use the OS
+certificate verifier when Python rejects an otherwise Windows-trusted local CA.
+There are no third-party Python packages to install. If a key or network is
+absent, an explicitly permitted deterministic mock can still prove the loop and
+ledger mechanics offline.
 
 To run against REAL Gemini (on a machine with network):
     setx GEMINI_API_KEY "...your key..."      (then open a NEW terminal)
-    set  AGENT_MODEL=gemini-flash-latest      (optional; whatever model is current)
-    python agent_loop.py
+    set  AGENT_MODEL=gemini-3.1-flash-lite    (optional model override)
+    py -3.13 agent_loop.py
 
 The ledger records the ACTIONS, not the model — so the audit trail is identical
 whichever model produced it. To use a different provider, replace call_model();
 everything downstream (recording, hashing, verification) is provider-agnostic.
 
-Security: TLS certificate verification is ON by default. If your network does
-TLS interception and you hit a certificate error, point Python at your corporate
-root CA:  set SSL_CERT_FILE=C:\path\to\corp-root.pem
-Only as a last, deliberate resort you can set AGENT_INSECURE_TLS=1 to disable
-verification — it prints a loud warning and must never be used with a real key
-on an untrusted network.
+Security: TLS certificate verification is mandatory. The Windows compatibility
+path uses the OS verifier and a fixed Gemini destination; it is not a bypass.
+This program deliberately has no switch that disables TLS verification.
 
 Stdlib only. Python 3.9+.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
-import ssl
-import urllib.request
+import tempfile
 
 # Optional .env support (only if python-dotenv happens to be installed).
 try:
@@ -42,66 +38,60 @@ try:
 except ImportError:
     pass
 
-from agent_ledger import (encode_record, block_hash, verify_chain, GENESIS,
+from agent_ledger import (encode_record, decode_record, block_hash, verify_chain, GENESIS,
                           action_record, write_jsonl)
 from agent_notary import anchor, verify_with_anchor
+from gemini_config import configured_model, gemini_json_request, get_api_key, safe_model_error
 from policy_gate import load_policy, evaluate, decision_record
+from sandbox import SandboxExecutor
 
 
-# --- key discovery: prefer the current environment, else read what `setx` stored
-def _get_user_env(name: str) -> str:
-    """Read a persistent user env var from the Windows registry (what setx writes).
-    A value set with `setx` in another window is NOT visible via os.environ in this
-    process, so we look it up directly. No-op on non-Windows."""
-    try:
-        import winreg  # Windows only
-    except ImportError:
-        return ""
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as key:
-            return winreg.QueryValueEx(key, name)[0]
-    except Exception:
-        return ""
+MODEL = configured_model("AGENT_MODEL")
 
-
-if not os.environ.get("GEMINI_API_KEY"):
-    _found = _get_user_env("GEMINI_API_KEY")
-    if _found:
-        os.environ["GEMINI_API_KEY"] = _found
-
-MODEL = os.environ.get("AGENT_MODEL", "gemini-flash-latest")
-
-# CLEARANCE: load the control-tower policy (allow-all if none present).
+# CLEARANCE: policy availability is itself a security condition. A missing or
+# malformed policy must never turn into implicit authority for the model.
 _POLICY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "default_policy.json")
-POLICY = load_policy(_POLICY_PATH) if os.path.exists(_POLICY_PATH) else None
+POLICY = None
+POLICY_ERROR = ""
+try:
+    if not os.path.exists(_POLICY_PATH):
+        POLICY_ERROR = "default policy file is missing"
+    else:
+        POLICY = load_policy(_POLICY_PATH)
+except (OSError, ValueError, TypeError) as exc:
+    POLICY_ERROR = "default policy could not be loaded: " + type(exc).__name__
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORK = os.path.join(HERE, "agent_work")
 os.makedirs(WORK, exist_ok=True)
+RUNS = os.path.join(WORK, "runs")
+os.makedirs(RUNS, exist_ok=True)
+SANDBOX_MODE = os.environ.get("AGENT_SANDBOX_MODE", "hard")
+# Allow a little Docker cold-start time while retaining a strict per-action
+# bound. The lower-level SandboxExecutor default remains five seconds for
+# direct diagnostics; the agent path has the additional container startup cost.
+ACTION_TIMEOUT_SECONDS = 10.0
+SANDBOX = SandboxExecutor(WORK, mode=SANDBOX_MODE)
 
 
-# --- real, local, sandboxed tools -------------------------------------------
-def _safe(name: str) -> str:
-    return os.path.basename(str(name))          # no path traversal
+def _new_run_workspace() -> str:
+    """Create a fresh workspace so one model run cannot see another run's files."""
+    return tempfile.mkdtemp(prefix="run-", dir=RUNS)
 
 
-def t_write_note(name: str, text: str) -> dict:
-    with open(os.path.join(WORK, _safe(name)), "w", encoding="utf-8") as f:
-        f.write(text)
-    return {"bytes": len(text.encode("utf-8"))}
+def authorize(policy: dict | None, policy_error: str, tool: str, args: dict) -> tuple[str, str, str]:
+    """Return a pre-execution decision; unavailable policy always denies.
+
+    Keeping this small function separate makes the failure mode testable without
+    invoking a model or a sandbox. The policy file is required authorization,
+    not an optional convenience setting.
+    """
+    if policy is None:
+        return ("DENY", "policy_unavailable", policy_error or "no policy is loaded")
+    return evaluate(policy, tool, args)
 
 
-def t_sha256_note(name: str) -> dict:
-    with open(os.path.join(WORK, _safe(name)), "rb") as f:
-        return {"sha256": hashlib.sha256(f.read()).hexdigest()}
-
-
-def t_list_notes() -> dict:
-    return {"files": sorted(os.listdir(WORK))}
-
-
-TOOLS = {"write_note": t_write_note, "sha256_note": t_sha256_note, "list_notes": t_list_notes}
-
+# --- tool descriptions (execution occurs only in sandbox_worker.py) ---------
 TOOL_SCHEMA = [
     {"type": "function", "function": {"name": "write_note",
         "description": "Write a text note to the workspace.",
@@ -133,18 +123,6 @@ def mock_model(messages, tools):
     return {"content": "Done: wrote sab_summary.txt, checksummed it, and listed the workspace.", "tool_calls": []}
 
 
-def _ssl_context() -> ssl.SSLContext:
-    """Secure by default. Honors SSL_CERT_FILE for a corporate root CA.
-    AGENT_INSECURE_TLS=1 disables verification (loud warning) — last resort only."""
-    ctx = ssl.create_default_context()
-    if os.environ.get("AGENT_INSECURE_TLS") == "1":
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        print("  !! WARNING: TLS verification DISABLED (AGENT_INSECURE_TLS=1). "
-              "Your API key can be intercepted. Do not use on an untrusted network. !!")
-    return ctx
-
-
 def _to_gemini(messages, tools):
     """Translate OpenAI-style messages/tools into Gemini generateContent format."""
     gemini_tools = []
@@ -160,9 +138,15 @@ def _to_gemini(messages, tools):
     for m in messages:
         if m["role"] == "tool":
             # a tool result -> Gemini functionResponse (carries the real tool name)
-            fr = {"functionResponse": {
+            function_response = {
                 "name": m.get("name", "tool"),
-                "response": {"result": m.get("content", "")}}}
+                "response": {"result": m.get("content", "")},
+            }
+            # Gemini 3 validates function responses against the exact call ID.
+            # Older models tolerate its absence, but preserving it is harmless.
+            if m.get("tool_call_id"):
+                function_response["id"] = m["tool_call_id"]
+            fr = {"functionResponse": function_response}
             contents.append({"role": "user", "parts": [fr]})
             continue
 
@@ -174,6 +158,12 @@ def _to_gemini(messages, tools):
             continue
 
         # assistant turn
+        # Gemini 3 function calls carry an encrypted thoughtSignature.  The
+        # REST API requires the complete model parts to be echoed verbatim on
+        # the next turn; reconstructing only name/args causes HTTP 400.
+        if m.get("_gemini_parts") is not None:
+            contents.append({"role": "model", "parts": m["_gemini_parts"]})
+            continue
         parts = []
         if m.get("content"):
             parts.append({"text": m["content"]})
@@ -191,34 +181,36 @@ def _to_gemini(messages, tools):
 
 
 def call_model(messages: list, tools: list) -> dict:
-    """Call Gemini over REST (stdlib only). Fall back to the offline mock on any error."""
+    """Call Gemini. Mock use is available only when explicitly enabled."""
+    if os.environ.get("AGENT_FORCE_MOCK") == "1":
+        return {"_mock_reason": "explicit", **mock_model(messages, tools)}
+    api_key = get_api_key()
+    if not api_key:
+        if os.environ.get("AGENT_ALLOW_MOCK") == "1":
+            return {"_mock_reason": "missing_key", **mock_model(messages, tools)}
+        raise RuntimeError("GEMINI_API_KEY is not configured. Run gemini_preflight.py before a live agent run.")
     try:
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY missing")
-
         raw_model = MODEL.split("/", 1)[1] if "/" in MODEL else MODEL
         url = ("https://generativelanguage.googleapis.com/v1beta/models/"
-               + raw_model + ":generateContent?key=" + api_key)
+               + raw_model + ":generateContent")
 
-        data = json.dumps(_to_gemini(messages, tools)).encode("utf-8")
-        req = urllib.request.Request(url, data=data, method="POST",
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=30, context=_ssl_context()) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
+        body = gemini_json_request(url, api_key, _to_gemini(messages, tools), timeout=30)
 
         cands = body.get("candidates") or []
         if not cands:
             raise ValueError("no candidates returned: " + str(body))
 
-        raw_msg = {"role": "assistant", "content": None}
+        raw_msg = {"role": "assistant", "content": None, "_gemini_parts": []}
         tcs, oai_calls = [], []
         for part in cands[0].get("content", {}).get("parts", []):
+            # Keep the exact response parts, including Gemini 3 thought
+            # signatures, for the next stateless REST request.
+            raw_msg["_gemini_parts"].append(part)
             if "text" in part and part["text"]:
                 raw_msg["content"] = (raw_msg["content"] or "") + part["text"]
             if "functionCall" in part:
                 fc = part["functionCall"]
-                tc_id = "call_" + fc["name"]
+                tc_id = fc.get("id") or "call_" + fc["name"]
                 args = fc.get("args", {}) or {}
                 tcs.append({"id": tc_id, "name": fc["name"], "args": args})
                 oai_calls.append({"id": tc_id, "type": "function",
@@ -228,24 +220,33 @@ def call_model(messages: list, tools: list) -> dict:
         return {"content": raw_msg.get("content"), "tool_calls": tcs, "_raw": raw_msg}
 
     except Exception as e:
-        return {"_mock_reason": type(e).__name__ + ": " + str(e), **mock_model(messages, tools)}
+        if os.environ.get("AGENT_ALLOW_MOCK") == "1":
+            return {"_mock_reason": type(e).__name__, **mock_model(messages, tools)}
+        raise RuntimeError(safe_model_error(e)) from None
 
 
 # --- the agent loop, recording every action into the ledger -----------------
 def run(task: str, max_turns: int = 8):
     messages = [
-        {"role": "system", "content": "You are a careful agent. Use the tools to complete the task, then stop."},
+        {"role": "system", "content": (
+            "You are a careful agent. Use the tools to complete the task, then stop. "
+            "This run has a fresh isolated workspace; use relative filenames only."
+        )},
         {"role": "user", "content": task},
     ]
     blocks, prev, step, t0 = [], GENESIS, 0, 1_720_000_000_000
     used_mock = None
+    run_sandbox = SandboxExecutor(
+        _new_run_workspace(), mode=SANDBOX_MODE,
+        timeout_seconds=ACTION_TIMEOUT_SECONDS,
+    )
 
     for _ in range(max_turns):
         out = call_model(messages, TOOL_SCHEMA)
         if used_mock is None:
             used_mock = "_mock_reason" in out
         if not out["tool_calls"]:
-            print("  [model] final: " + (out.get("content") or "").strip()[:80])
+            print("  [model claim; untrusted] " + (out.get("content") or "").strip()[:80])
             break
         # thread the assistant turn (real functionCalls preserved for the next request)
         messages.append(out.get("_raw") or {"role": "assistant", "content": None,
@@ -254,21 +255,19 @@ def run(task: str, max_turns: int = 8):
                            for tc in out["tool_calls"]]})
         for tc in out["tool_calls"]:
             # CLEARANCE: the tower decides BEFORE the action runs.
-            if POLICY is None:
-                decision, rule, why = "ALLOW", "no_policy", "no policy loaded"
-            else:
-                decision, rule, why = evaluate(POLICY, tc["name"], tc["args"])
+            decision, rule, why = authorize(POLICY, POLICY_ERROR, tc["name"], tc["args"])
             if decision == "DENY":
                 result, status = {"blocked": True, "reason": why}, "denied"
+                enforcement = {"selected": "not_executed", "reason": "policy_denied"}
             else:
-                try:
-                    result = TOOLS[tc["name"]](**tc["args"])
-                    status = "ok"
-                except Exception as e:
-                    result, status = {"error": str(e)}, "error"
+                outcome = run_sandbox.execute(tc["name"], tc["args"])
+                result = outcome["result"]
+                status = outcome["status"]
+                enforcement = outcome["enforcement"]
             # RECORD the decision + outcome into the tamper-evident ledger
             payload = encode_record(decision_record(step, tc["name"], tc["args"],
-                                                    decision, rule, result, status))
+                                                    decision, rule, result, status,
+                                                    enforcement=enforcement))
             ts = t0 + step * 1000
             h = block_hash(step, ts, prev, payload)
             blocks.append({"index": step, "timestampMs": ts, "prevHash": prev,
@@ -276,7 +275,8 @@ def run(task: str, max_turns: int = 8):
                            "stateRcsHex": payload.hex(), "blockHash": h})
             prev = h
             print("  [" + str(step) + "] POLICY " + decision + " (" + rule + ") "
-                  + tc["name"] + " -> " + json.dumps(result)[:40] + "  block " + h[:12] + "...")
+                  + tc["name"] + " -> " + status + " " + json.dumps(result)[:40]
+                  + "  block " + h[:12] + "...")
             messages.append({"role": "tool", "tool_call_id": tc["id"],
                              "name": tc["name"], "content": json.dumps(result)})
             step += 1
@@ -289,14 +289,39 @@ def main() -> int:
     print("AGENT LOOP -> TAMPER-EVIDENT LEDGER  (Gemini via stdlib REST)")
     print(line)
     print("model target: " + MODEL)
+    if POLICY is None:
+        print("policy      : UNAVAILABLE — every proposed action will be denied (" + POLICY_ERROR + ")")
+    sandbox_report = SANDBOX.describe()
+    print("sandbox     : " + sandbox_report["tier"] + " (requested=" + SANDBOX_MODE + ")")
+    if not sandbox_report["hard_boundary"]:
+        print("  FAIL-CLOSED NOTICE: " + sandbox_report.get(
+            "reason", sandbox_report.get("warning", "hard boundary unavailable")))
 
-    blocks, used_mock = run("Write a one-line summary note about SAB, checksum it, and list the workspace.")
-    print("\n[model path] " + ("MOCK (offline: no key/network here)" if used_mock else "LIVE Gemini -> " + MODEL))
+    try:
+        blocks, used_mock = run("Write a one-line summary note about SAB, checksum it, and list the workspace.")
+    except RuntimeError as exc:
+        print("\nmodel error: " + str(exc))
+        print("No substitute model was used. Set AGENT_ALLOW_MOCK=1 only for an offline demo.")
+        return 3
+    print("\n[model path] " + ("MOCK (explicit or permitted fallback)" if used_mock else "LIVE Gemini -> " + MODEL))
+
+    decoded = [decode_record(bytes.fromhex(block["stateRcsHex"])) for block in blocks]
+    expected_tools = ["write_note", "sha256_note", "list_notes"]
+    actual_tools = [record["tool"] for record in decoded]
+    postcondition_ok = (
+        actual_tools == expected_tools
+        and all(record["status"] == "ok" for record in decoded)
+    )
+    print("[controller postcondition] " + (
+        "SATISFIED: required actions completed"
+        if postcondition_ok
+        else "NOT SATISFIED: model completion claim rejected"
+    ))
 
     src = os.path.join(HERE, "agent_loop_ledger.jsonl")
     write_jsonl(blocks, src)
     ok, _, reason = verify_chain(src)
-    print("\nrecorded " + str(len(blocks)) + " real tool actions -> " + os.path.basename(src))
+    print("\nrecorded " + str(len(blocks)) + " clearance records -> " + os.path.basename(src))
     print("self-verify: " + ("OK" if ok else "FAIL") + " -- " + reason)
 
     # out-of-band anchor: seal the tail somewhere the attacker cannot reach, so a
@@ -319,10 +344,10 @@ def main() -> int:
         detected = recomputed != bad0["blockHash"]
         print("tamper test: edited block 0 -> " + ("DETECTED (hash no longer matches)" if detected else "MISSED"))
 
-    print("\ncross-runtime: verify this real-agent trace in C# too ->")
+    print("\ncross-runtime: verify this agent decision trace in C# too ->")
     print("  dotnet run --project xrt_verify -- agent_loop_ledger.jsonl")
     print(line)
-    return 0 if ok else 1
+    return 0 if (ok and sandbox_report["hard_boundary"] and postcondition_ok) else 2
 
 
 if __name__ == "__main__":

@@ -1,0 +1,161 @@
+{
+  "schema": "agent-ledger-tower-component-review-v1",
+  "components": [
+    {
+      "id": "active_tree_admission",
+      "status": "workable",
+      "files": ["active_tree_review.py", "active_tree_exclusions.json", "test_active_tree_review.py"],
+      "problem": "Prevent unreviewed source files from entering the active tower development tree.",
+      "inputs": "The canonical release allowlist, the active tree, and explicit runtime/admin exclusions.",
+      "outputs": "A deterministic pass/fail admission report with canonical and excluded counts.",
+      "failure_modes": "Missing canonical files, malformed exclusions, symlinks, or any unallowlisted non-runtime file fail closed.",
+      "reuses": "The existing release allowlist and the same plain-language review contract used by component_review.py.",
+      "tests": ["test_active_tree_review.py", "active_tree_review.py", "run_all.ps1"],
+      "not_claimed": "It does not decide whether a reviewed file is correct, safe, or valuable; it only prevents silent admission and requires explicit exclusions for generated state."
+    },
+    {
+      "id": "review_automation",
+      "status": "workable",
+      "files": ["component_review.py", "component_review_registry.json", "test_component_review.py"],
+      "problem": "Prevent an unreviewed file from entering the release unnoticed.",
+      "inputs": "The package file tree and this declarative review registry.",
+      "outputs": "A deterministic pass/fail coverage report.",
+      "failure_modes": "Missing, duplicate, malformed, or stale file entries fail the check.",
+      "reuses": "The existing release layout and Python standard library only.",
+      "tests": ["test_component_review.py", "run_all.ps1"],
+      "not_claimed": "It does not prove code correctness, security, or product value."
+    },
+    {
+      "id": "release_metadata",
+      "status": "workable",
+      "files": [".gitattributes", ".gitignore", ".github/workflows/verify.yml", "LICENSE", "global.json", "release_files.json", "release_hygiene.py", "test_release_hygiene.py"],
+      "problem": "Make source handling, licensing, and intended automation reproducible.",
+      "inputs": "Git, GitHub Actions, and .NET toolchain settings.",
+      "outputs": "Consistent repository behavior, declared licensing, and a fail-closed manifest, language, credential-pattern, and runtime-ignore check.",
+      "failure_modes": "A pattern scan is not a complete secret scanner, and a hosted workflow can still fail or never run; local configuration does not prove hosted execution.",
+      "reuses": "Standard Git attributes, Apache-2.0 license text, and vendor CI actions.",
+      "tests": ["release_hygiene.py", "test_release_hygiene.py", "run_all.ps1", "future hosted GitHub Actions run"],
+      "not_claimed": "It does not establish hosted CI coverage, prove there are no secrets, or replace an independent security review."
+    },
+    {
+      "id": "operator_documentation",
+      "status": "workable",
+      "files": ["COMPONENTS.md", "README.md", "VERIFIABLE_AI_WORKFLOWS.md", "REVIEW_POLICY.md", "PUBLISHING.md", "SPEC.md", "POLICY.md", "SANDBOX.md", "SETUP_GEMINI.md"],
+      "problem": "Give an operator accurate scope, setup, and failure-boundary instructions.",
+      "inputs": "The reviewed implementation and reproducible local proof output.",
+    "outputs": "Plain-language first-use instructions, operator workflows, and stated limits.",
+      "failure_modes": "Documentation can become stale if it is not updated with the source and tests.",
+      "reuses": "The source contracts, test suite, and manifest evidence.",
+      "tests": ["component_review.py", "run_all.ps1"],
+      "not_claimed": "Documentation is not evidence that an untested claim is true."
+    },
+    {
+      "id": "release_automation",
+      "status": "workable",
+      "files": ["setup_sandbox.ps1", "setup_sandbox.sh", "run_all.ps1", "run_all.sh", "start_chat.ps1", "start_tower.ps1", "export_standalone.ps1"],
+      "problem": "Provide one-command setup, proof, UI launch, and clean export paths.",
+      "inputs": "A supported Python interpreter, Docker, Node, and .NET where required.",
+      "outputs": "A deterministic local proof or an explicit nonzero failure.",
+      "failure_modes": "Missing runtimes or Docker cause an incomplete result rather than a degraded success claim.",
+      "reuses": "The individual Python, C#, Node, and Docker components.",
+      "tests": ["run_all.ps1 -BuildSandbox", "run_all.sh"],
+      "not_claimed": "Launch scripts do not replace deployment or operating-system hardening."
+    },
+    {
+      "id": "ledger_and_independent_verification",
+      "status": "workable",
+      "files": ["agent_ledger.py", "agent_notary.py", "verify.js", "xrt_verify/Program.cs", "xrt_verify/xrt_verify.csproj"],
+      "problem": "Record agent actions deterministically and allow independent replay checks.",
+      "inputs": "Canonical action records, prior hashes, and an anchor record.",
+      "outputs": "A hash-linked JSONL ledger and Python, Node, and C# verification results.",
+      "failure_modes": "A local anchor is weak if an attacker can rewrite both the ledger and its anchor.",
+      "reuses": "SHA-256, standard JSON, and separate C# and Node implementations.",
+      "tests": ["run_all.ps1 -BuildSandbox", "verify.js", "xrt_verify/Program.cs"],
+      "not_claimed": "A local hash chain is not tamper-proof or distributed consensus."
+    },
+    {
+      "id": "policy_gate",
+      "status": "refine",
+      "files": ["policy_gate.py", "default_policy.json", "policy_gate_demo.py"],
+      "problem": "Ensure unapproved tools and unsafe arguments are denied before execution.",
+      "inputs": "A tool name, arguments, and a default-deny policy.",
+      "outputs": "Allow or deny decisions with an attributable rule.",
+      "failure_modes": "The example policy is intentionally narrow; new tools require new rules and tests.",
+      "reuses": "The ledger decision schema and sandbox executor.",
+      "tests": ["test_agent_loop_policy.py", "policy_gate_demo.py"],
+      "not_claimed": "The default policy is not a full enterprise authorization language."
+    },
+    {
+      "id": "sandbox_boundary",
+      "status": "prototype",
+      "files": ["Dockerfile.sandbox", "sandbox.py", "sandbox_worker.py", "sandbox_demo.py"],
+      "problem": "Constrain each approved tool action to a networkless, resource-bounded worker.",
+      "inputs": "An approved tool call and a declared workspace mount.",
+      "outputs": "A bounded result or a blocked/failed action record.",
+      "failure_modes": "Docker does not protect an unpatched host or replace a production isolation review.",
+      "reuses": "Docker namespaces, cgroup limits, rlimits, and the policy gate.",
+      "tests": ["test_sandbox.py", "sandbox_demo.py --mode hard"],
+      "not_claimed": "The container is not a complete hostile multi-user security boundary."
+    },
+    {
+      "id": "controlled_agent_and_fleet",
+      "status": "prototype",
+      "files": ["agent_loop.py", "fleet_tower.py", "operator_console.py", "forgery_demo.py"],
+      "problem": "Demonstrate governed tool use, fleet verification, and tamper detection.",
+      "inputs": "Model proposals or deterministic mock actions, policy decisions, and sandbox outcomes.",
+      "outputs": "Recorded actions, fleet status, kill controls, and explicit flags.",
+      "failure_modes": "A model can still propose poor actions; the controller can only govern registered capabilities.",
+      "reuses": "Policy, sandbox, ledger, anchor, and independent verifiers.",
+      "tests": ["test_agent_loop_policy.py", "test_fleet_tower.py", "run_all.ps1 -BuildSandbox"],
+      "not_claimed": "The demo agent is not autonomous general intelligence or an enterprise fleet service."
+    },
+    {
+      "id": "provenance_chat_and_exact_math",
+      "status": "refine",
+      "files": ["memory_index.py", "exact_math_tool.py", "response_quality.py", "chat_console.py"],
+      "problem": "Provide source-backed local retrieval and exact rational calculations without granting tool authority.",
+      "inputs": "Selected local text, search queries, and bounded rational expressions.",
+    "outputs": "Deterministic source-hashed evidence packets, local digest-addressed packet snapshots, citations, structural response flags, and exact fraction results.",
+    "failure_modes": "Snapshots can contain selected local excerpts, are not encrypted by this package, and must remain local; citations and packet hashes do not make a source true, and exact arithmetic does not make a model factual.",
+      "reuses": "SQLite FTS, Python Fraction, and the action ledger.",
+      "tests": ["test_memory_index.py", "test_exact_math_tool.py", "test_response_quality.py", "test_chat_console.py"],
+    "not_claimed": "This is not an IEEE-754 replacement, factuality oracle, full prompt archive, deterministic model replay, or model-memory cure."
+    },
+    {
+      "id": "model_configuration_and_evaluation",
+      "status": "refine",
+      "files": ["gemini_config.py", "gemini_preflight.py", "windows_native_http.ps1", "evaluation_suite.py", "evaluation_cases.json", "live_model_benchmark.py", "live_benchmark_cases.json", "review_live_benchmark.py"],
+      "problem": "Keep model connection, deterministic controller tests, and human-scored live evaluation distinct.",
+      "inputs": "A private environment key, stable model name, fixed fixtures, and human review.",
+      "outputs": "Secret-safe readiness evidence, verified Python or Windows-native HTTPS transport, deterministic results, separately marked live evidence, and digest-bound human-review validation.",
+      "failure_modes": "TLS, authentication, network, PowerShell availability, or model failures produce request_failed rather than fabricated model evidence.",
+      "reuses": "The response-quality contract, Python standard-library HTTPS, and Windows' native certificate verifier through a destination-allowlisted helper.",
+      "tests": ["test_gemini_config.py", "test_evaluation_suite.py", "test_live_model_benchmark.py", "review_live_benchmark.py --validate"],
+      "not_claimed": "The Windows compatibility path is not a general HTTP client or certificate bypass, and a passing structural corpus or human form does not prove live model quality."
+    },
+    {
+      "id": "unified_operator_console",
+      "status": "refine",
+      "files": ["tower_console.py"],
+      "problem": "Consolidate chat, exact math, fleet status, and guarded operator controls into one local interface.",
+      "inputs": "Local chat service, fleet report, and a per-process request token.",
+      "outputs": "A localhost dashboard with explicit operator actions.",
+      "failure_modes": "The page is local only and does not authenticate remote or multiple users.",
+      "reuses": "ChatService and fleet-control functions instead of duplicating their logic.",
+      "tests": ["test_tower_console.py"],
+      "not_claimed": "The UI is not a remote operations platform or access-control system."
+    },
+    {
+      "id": "regression_tests",
+      "status": "workable",
+      "files": ["test_sandbox.py", "test_agent_loop_policy.py", "test_memory_index.py", "test_exact_math_tool.py", "test_response_quality.py", "test_evaluation_suite.py", "test_live_model_benchmark.py", "test_chat_console.py", "test_gemini_config.py", "test_fleet_tower.py", "test_tower_console.py"],
+      "problem": "Keep each stated controller contract regressible without requiring a live model call.",
+      "inputs": "Deterministic fixtures, temporary files, and isolated component APIs.",
+      "outputs": "Local pass/fail evidence for declared behavior.",
+      "failure_modes": "Tests only cover their stated contracts and cannot prove untested security or model behavior.",
+      "reuses": "Python unittest and the reviewed component interfaces.",
+      "tests": ["run_all.ps1", "run_all.sh"],
+      "not_claimed": "Passing tests do not prove production readiness or live-model correctness."
+    }
+  ]
+}

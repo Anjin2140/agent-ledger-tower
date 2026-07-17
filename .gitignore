@@ -32,3 +32,13 @@ node_modules/
 Thumbs.db
 .vscode/
 .idea/
+# Local evidence-chat state
+chat_memory.sqlite3
+chat_ledger.jsonl
+tower_memory.sqlite3
+tower_ledger.jsonl
+evidence_packets/
+.pytest_cache/
+sandbox_jail/
+*.sqlite3
+RELEASE_MANIFEST.json

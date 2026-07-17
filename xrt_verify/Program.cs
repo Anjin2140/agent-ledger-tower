@@ -87,8 +87,8 @@ internal static class Program
 
         Console.WriteLine(new string('-', 62));
         Console.WriteLine(fails == 0
-            ? $"CHAIN: {count} blocks verified in C# — matches Python bit-for-bit"
-            : $"CHAIN: {fails} FAILURE(S) — chain does not verify");
+            ? $"CHAIN: {count} blocks verified in C# -- matches Python bit-for-bit"
+            : $"CHAIN: {fails} FAILURE(S) -- chain does not verify");
 
         // --- out-of-band anchor check (optional) ---------------------------------
         int anchorFail = 0;
@@ -121,9 +121,9 @@ internal static class Program
                     Console.WriteLine($"ANCHOR: recomputed tail {lastRecomputed[..12]}.. len {count}");
                     Console.WriteLine($"        sealed     tail {anchoredTail[..12]}.. len {anchoredLen}");
                     Console.WriteLine(anchorFail == 0
-                        ? "ANCHOR: matches sealed anchor — rewrite/rollback would be caught here"
-                        : (!lenOk ? "ANCHOR: LENGTH MISMATCH — truncation/rollback detected"
-                                  : "ANCHOR: TAIL MISMATCH — ledger was rewritten"));
+                        ? "ANCHOR: matches sealed anchor -- rewrite/rollback would be caught here"
+                        : (!lenOk ? "ANCHOR: LENGTH MISMATCH -- truncation/rollback detected"
+                                  : "ANCHOR: TAIL MISMATCH -- ledger was rewritten"));
                 }
             }
         }

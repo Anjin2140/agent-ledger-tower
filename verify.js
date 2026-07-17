@@ -72,8 +72,8 @@ function main() {
   }
   console.log('-'.repeat(62));
   console.log(fails === 0
-    ? `CHAIN: ${blocks.length} blocks verified in Node — independent of the writing stack`
-    : `CHAIN: ${fails} FAILURE(S) — chain does not verify`);
+    ? `CHAIN: ${blocks.length} blocks verified in Node -- independent of the writing stack`
+    : `CHAIN: ${fails} FAILURE(S) -- chain does not verify`);
 
   let anchorFail = 0;
   if (notaryPath) {
@@ -86,9 +86,9 @@ function main() {
     console.log(`ANCHOR: recomputed tail ${lastRecomputed.slice(0, 12)}.. len ${blocks.length}`);
     console.log(`        sealed     tail ${String(a.tail).slice(0, 12)}.. len ${a.len}`);
     console.log(anchorFail === 0
-      ? 'ANCHOR: matches sealed anchor — a rewrite or rollback would fail here'
-      : (!lenOk ? 'ANCHOR: LENGTH MISMATCH — truncation/rollback detected'
-                : 'ANCHOR: TAIL MISMATCH — ledger was rewritten from genesis'));
+      ? 'ANCHOR: matches sealed anchor -- a rewrite or rollback would fail here'
+      : (!lenOk ? 'ANCHOR: LENGTH MISMATCH -- truncation/rollback detected'
+                : 'ANCHOR: TAIL MISMATCH -- ledger was rewritten from genesis'));
   }
   process.exit((fails === 0 && anchorFail === 0) ? 0 : 1);
 }

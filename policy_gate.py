@@ -76,20 +76,27 @@ def _matches(rule, tool, args):
 
 
 def evaluate(policy, tool, args):
-    """Return (decision, rule_id, reason). Deterministic; first deny wins."""
-    for rule in policy.get("rules", []):
+    """Return (decision, rule_id, reason). Denies precede explicit allows."""
+    rules = policy.get("rules", [])
+    for rule in rules:
         if rule.get("effect") == "deny" and _matches(rule, tool, args):
             return ("DENY", rule.get("id", "<rule>"), rule.get("reason", "denied by policy"))
-    if str(policy.get("default", "allow")).lower() == "deny":
-        return ("DENY", "default_deny", "no allow rule matched (default deny)")
+    for rule in rules:
+        if rule.get("effect") == "allow" and _matches(rule, tool, args):
+            return ("ALLOW", rule.get("id", "<rule>"), rule.get("reason", "allowed by policy"))
+    if str(policy.get("default", "deny")).lower() == "deny":
+        return ("DENY", "default_deny", "no explicit allow rule matched")
     return ("ALLOW", "default_allow", "no deny rule matched")
 
 
-def decision_record(step, tool, args, decision, rule, result, status):
+def decision_record(step, tool, args, decision, rule, result, status, enforcement=None):
     """Canonical, hashable record of one clearance decision + its outcome."""
-    return {"step": step, "tool": tool, "args": canon(args),
-            "decision": decision, "rule": rule,
-            "result": canon(result), "status": status}
+    record = {"step": step, "tool": tool, "args": canon(args),
+              "decision": decision, "rule": rule,
+              "result": canon(result), "status": status}
+    if enforcement is not None:
+        record["enforcement"] = canon(enforcement)
+    return record
 
 
 def make_block(index, ts, prev, record):

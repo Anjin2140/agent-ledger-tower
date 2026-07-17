@@ -18,18 +18,29 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 from agent_ledger import verify_chain, decode_record, GENESIS, write_jsonl
 from agent_notary import anchor, verify_with_anchor
 from policy_gate import load_policy, evaluate, decision_record, make_block
+from sandbox import SandboxExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FLEET = os.path.join(HERE, "fleet")
+SANDBOX_MODE = os.environ.get("AGENT_SANDBOX_MODE", "hard")
+AGENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 
 
 # --- operator kill switch ----------------------------------------------------
+def validate_agent_id(agent_id: str) -> str:
+    """Reject path-like identifiers before they can reach the fleet filesystem."""
+    if not isinstance(agent_id, str) or not AGENT_ID.fullmatch(agent_id):
+        raise ValueError("agent id must contain only letters, numbers, '.', '_', or '-'")
+    return agent_id
+
+
 def kill_path(agent_id):
-    return os.path.join(FLEET, agent_id, "KILL")
+    return os.path.join(FLEET, validate_agent_id(agent_id), "KILL")
 
 
 def is_killed(agent_id):
@@ -38,8 +49,11 @@ def is_killed(agent_id):
 
 # --- a minimal gated agent that writes its own ledger + anchor --------------
 def _build(agent_id, proposals, policy, gate=True):
-    os.makedirs(os.path.join(FLEET, agent_id), exist_ok=True)
-    ledger = os.path.join(FLEET, agent_id, "ledger.jsonl")
+    agent_dir = os.path.join(FLEET, agent_id)
+    work_dir = os.path.join(agent_dir, "work")
+    os.makedirs(work_dir, exist_ok=True)
+    ledger = os.path.join(agent_dir, "ledger.jsonl")
+    sandbox = SandboxExecutor(work_dir, mode=SANDBOX_MODE)
 
     # an operator kill grounds the agent: it records a halt and does nothing else
     if is_killed(agent_id):
@@ -50,16 +64,24 @@ def _build(agent_id, proposals, policy, gate=True):
         if tool == "__halt__":
             decision, rule, why = "HALTED", "operator_kill", "grounded by operator"
             result, status = {"halted": True}, "halted"
+            enforcement = {"selected": "not_executed", "reason": "operator_kill"}
         elif gate:
             decision, rule, why = evaluate(policy, tool, args)
             if decision == "DENY":
-                result, status = {"blocked": True}, "denied"
+                result, status = {"blocked": True, "reason": why}, "denied"
+                enforcement = {"selected": "not_executed", "reason": "policy_denied"}
             else:
-                result, status = {"executed": True}, "ok"
-        else:                                   # rogue: no clearance gate at all
-            decision, rule, why = "ALLOW", "gate_bypassed", "ran without clearance"
-            result, status = {"executed": True}, "ok"
-        rec = decision_record(step, tool, args, decision, rule, result, status)
+                outcome = sandbox.execute(tool, args)
+                result, status = outcome["result"], outcome["status"]
+                enforcement = outcome["enforcement"]
+        else:
+            # Test fixture: claim an unmediated execution. No host action is
+            # actually launched; the tower must reject the missing boundary.
+            decision, rule, why = "ALLOW", "gate_bypassed", "claimed execution without clearance"
+            result, status = {"claimed_executed": True}, "ok"
+            enforcement = {"selected": "bypass", "hard_boundary": False}
+        rec = decision_record(step, tool, args, decision, rule, result, status,
+                              enforcement=enforcement)
         ts = t0 + step * 1000
         block, h = make_block(step, ts, prev, rec)
         blocks.append(block)
@@ -102,10 +124,18 @@ def audit_agent(ledger, notary, policy):
         rec = decode_record(bytes.fromhex(b["stateRcsHex"]))
         args = json.loads(rec["args"])
         d, vrule, _why = evaluate(policy, rec["tool"], args)
+        try:
+            enforcement = json.loads(rec.get("enforcement", "{}"))
+        except (TypeError, json.JSONDecodeError):
+            enforcement = {}
         if rec["status"] == "denied":
             denied += 1
         elif d == "DENY" and viol is None:
             viol = "executed '" + rec["tool"] + "' that policy denies (" + vrule + ")"
+        elif rec["status"].startswith("sandbox_") and viol is None:
+            viol = "hard sandbox did not execute '" + rec["tool"] + "' (" + rec["status"] + ")"
+        elif rec["status"] == "ok" and rec["decision"] == "ALLOW" and not enforcement.get("hard_boundary") and viol is None:
+            viol = "unconfined execution claimed for '" + rec["tool"] + "'"
     if viol:
         return {"status": "FLAG", "reason": "policy violation: " + viol}
     return {"status": "OK", "reason": "", "n": len(blocks), "denied": denied}

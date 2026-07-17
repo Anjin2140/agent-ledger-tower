@@ -7,13 +7,14 @@ tamper-evident ledger on every refresh, and lets an operator KILL an agent or
 relaunch the fleet. Stdlib only (http.server). Binds to 127.0.0.1, so the console
 is never exposed on the network.
 
-    python operator_console.py
+    py -3.13 operator_console.py
     # then open http://127.0.0.1:8765 in a browser
 """
 from __future__ import annotations
 
 import json
 import os
+import secrets
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -40,13 +41,19 @@ def fleet_report():
             r = fleet_tower.audit_agent(ledger, notary, policy)
             recent, tail = [], ""
             try:
-                blocks = [json.loads(l) for l in open(ledger, encoding="utf-8") if l.strip()]
+                with open(ledger, encoding="utf-8") as handle:
+                    blocks = [json.loads(line) for line in handle if line.strip()]
                 tail = blocks[-1]["blockHash"][:12] if blocks else ""
                 for b in blocks[-6:]:
                     rec = decode_record(bytes.fromhex(b["stateRcsHex"]))
+                    try:
+                        enforcement = json.loads(rec.get("enforcement", "{}"))
+                    except (TypeError, json.JSONDecodeError):
+                        enforcement = {}
                     recent.append({"step": rec["step"], "tool": rec["tool"],
                                    "decision": rec["decision"], "rule": rec["rule"],
-                                   "status": rec["status"]})
+                                   "status": rec["status"],
+                                   "boundary": enforcement.get("tier", enforcement.get("selected", ""))})
             except Exception:
                 pass
             if killed:
@@ -63,7 +70,29 @@ def fleet_report():
             "killed": sum(1 for a in agents if a["status"] == "KILLED")}
 
 
-HTML = r"""<!doctype html><html><head><meta charset="utf-8">
+def apply_fleet_action(action: str, agent_id: str = "") -> None:
+    """Perform an operator-approved local action after validating its target."""
+    if action == "launch":
+        fleet_tower.launch()
+        return
+    if action not in {"kill", "clear"}:
+        raise ValueError("unknown fleet action")
+    aid = fleet_tower.validate_agent_id(agent_id)
+    path = fleet_tower.kill_path(aid)
+    if action == "kill":
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("killed by operator")
+    else:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+
+def html_page(token: str) -> bytes:
+    """Render the localhost UI with an unguessable per-process POST token."""
+    page = r"""<!doctype html><html><head><meta charset="utf-8">
 <title>Fleet Control Tower</title>
 <style>
  body{margin:0;background:#0b0f14;color:#cbd5e1;font:14px/1.5 ui-monospace,Consolas,monospace}
@@ -100,7 +129,7 @@ async function load(){
  document.getElementById('rows').innerHTML = d.agents.map(a=>{
    const feed = a.recent.map(x=>{
      const cls = x.status==='denied'?'deny':(x.status==='halted'?'halt':'');
-     return '<span class="'+cls+'">'+x.tool+':'+x.decision+'</span>';
+     return '<span class="'+cls+'">'+x.tool+':'+x.decision+(x.boundary?' @'+x.boundary:'')+'</span>';
    }).join(' &middot; ');
    const btn = a.status==='KILLED'
      ? '<button onclick="act(\'/api/clear?agent='+a.id+'\')">Revive</button>'
@@ -113,12 +142,16 @@ async function load(){
      +'<td>'+btn+'</td></tr>';
  }).join('');
 }
-async function act(url){ await fetch(url,{method:'POST'}); await load(); }
+const token = __TOKEN__;
+async function act(url){ await fetch(url,{method:'POST',headers:{'X-Tower-Token':token}}); await load(); }
 load(); setInterval(load, 1500);
 </script></body></html>"""
+    return page.replace("__TOKEN__", json.dumps(token)).encode("utf-8")
 
 
 class Handler(BaseHTTPRequestHandler):
+    token: str
+
     def _send(self, code, ctype, body):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -132,40 +165,40 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path
         if path in ("/", "/index.html"):
-            self._send(200, "text/html; charset=utf-8", HTML.encode("utf-8"))
+            self._send(200, "text/html; charset=utf-8", html_page(self.token))
         elif path == "/api/fleet":
             self._send(200, "application/json", json.dumps(fleet_report()).encode("utf-8"))
         else:
             self._send(404, "text/plain", b"not found")
 
     def do_POST(self):
+        if not secrets.compare_digest(self.headers.get("X-Tower-Token", ""), self.token):
+            self._send(403, "application/json", b'{"error":"local request token required"}')
+            return
         u = urlparse(self.path)
         q = parse_qs(u.query)
         aid = (q.get("agent") or [""])[0]
-        if u.path == "/api/kill" and aid:
-            os.makedirs(os.path.join(FLEET, aid), exist_ok=True)
-            with open(fleet_tower.kill_path(aid), "w", encoding="utf-8") as f:
-                f.write("killed by operator")
-            self._send(200, "application/json", b'{"ok":true}')
-        elif u.path == "/api/clear" and aid:
-            try:
-                os.remove(fleet_tower.kill_path(aid))
-            except OSError:
-                pass
-            self._send(200, "application/json", b'{"ok":true}')
-        elif u.path == "/api/launch":
-            fleet_tower.launch()
-            self._send(200, "application/json", b'{"ok":true}')
-        else:
-            self._send(404, "text/plain", b"not found")
+        try:
+            if u.path == "/api/kill" and aid:
+                apply_fleet_action("kill", aid)
+                self._send(200, "application/json", b'{"ok":true}')
+            elif u.path == "/api/clear" and aid:
+                apply_fleet_action("clear", aid)
+                self._send(200, "application/json", b'{"ok":true}')
+            elif u.path == "/api/launch":
+                apply_fleet_action("launch")
+                self._send(200, "application/json", b'{"ok":true}')
+            else:
+                self._send(404, "text/plain", b"not found")
+        except ValueError as exc:
+            self._send(400, "application/json", json.dumps({"error": str(exc)}).encode("utf-8"))
 
 
 def main():
     port = 8765
     if "--port" in sys.argv:
         port = int(sys.argv[sys.argv.index("--port") + 1])
-    if not os.path.isdir(FLEET) or not os.listdir(FLEET):
-        fleet_tower.launch()
+    Handler.token = secrets.token_urlsafe(24)
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     print("operator console -> http://127.0.0.1:%d   (Ctrl+C to stop)" % port)
     try:

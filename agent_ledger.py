@@ -110,7 +110,8 @@ def block_hash(index: int, timestamp_ms: int, prev_hash: str, rcs: bytes) -> str
 
 def verify_chain(path: str):
     prev = GENESIS
-    blocks = [json.loads(l) for l in open(path, encoding="utf-8") if l.strip()]
+    with open(path, encoding="utf-8") as handle:
+        blocks = [json.loads(line) for line in handle if line.strip()]
     for i, b in enumerate(blocks):
         if b["index"] != i:
             return (False, i, "index mismatch")

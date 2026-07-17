@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-policy_gate_demo.py — the control tower's CLEARANCE AUTHORITY, demonstrated.
+policy_gate_demo.py — deterministic policy adjudication, demonstrated.
 
-A stream of proposed agent actions (some safe, some hostile) is run through the
-policy gate. Denied actions never execute; every decision — ALLOW or DENY, and
-the rule that fired — is written into the tamper-evident ledger and sealed with
+A stream of proposed agent actions (some safe, some hostile) is evaluated by the
+policy gate. This file does not execute tools; every simulated decision and
+the rule that fired is written into the tamper-evident ledger and sealed with
 an out-of-band anchor. The tower can then prove exactly what it permitted and
 what it refused.
 
@@ -50,7 +50,7 @@ def main():
             pass
 
     print(line)
-    print("CONTROL TOWER — CLEARANCE AUTHORITY (policy gate over the ledger)")
+    print("CONTROL TOWER — POLICY ADJUDICATION (no tools execute in this test)")
     print(line)
     print("policy: default=" + str(pol.get("default")) + ", rules=" + str(len(pol.get("rules", []))))
     print("")
@@ -62,7 +62,7 @@ def main():
     for step, (tool, args) in enumerate(PROPOSALS):
         decision, rule, why = evaluate(pol, tool, args)
         if decision == "ALLOW":
-            result, status = {"executed": True}, "ok"
+            result, status = {"cleared": True}, "cleared"
             allowed += 1
         else:
             result, status = {"blocked": True, "reason": why}, "denied"
@@ -81,12 +81,12 @@ def main():
     va = verify_with_anchor(ledger, notary)
 
     print("")
-    print("cleared: " + str(allowed) + " allowed, " + str(denied) + " DENIED and blocked")
+    print("adjudicated: " + str(allowed) + " allowed, " + str(denied) + " DENIED and blocked")
     print("ledger : " + str(len(blocks)) + " decisions recorded -> " + os.path.basename(ledger))
     print("verify : chain " + ("OK" if ok else "FAIL") + " (" + reason + ")"
           + "  |  anchor " + ("OK" if va["anchor_ok"] else "MISMATCH"))
     print("")
-    print("Every clearance decision is now in the tamper-evident, replayable record.")
+    print("Every simulated policy decision is in the tamper-evident, replayable record.")
     print("Cross-check it in another runtime (decisions included, no code shared):")
     print("  node verify.js gate_ledger.jsonl gate_notary.log")
     print(line)
