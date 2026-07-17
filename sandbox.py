@@ -27,7 +27,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORKER = os.path.join(HERE, "sandbox_worker.py")
-SANDBOX_IMAGE = os.environ.get("AGENT_SANDBOX_IMAGE", "agent-ledger-tower-sandbox:latest")
+SANDBOX_IMAGE = os.environ.get("AGENT_SANDBOX_IMAGE", "agent-ledger-sandbox:1")
 SECRET_HINTS = ("KEY", "SECRET", "TOKEN", "PASSWORD", "PASSWD", "CREDENTIAL")
 
 

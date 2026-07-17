@@ -9,9 +9,9 @@ permissions:
   contents: read
 
 jobs:
-  control-tower-proof:
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -31,10 +31,20 @@ jobs:
         with:
           node-version: "22.x"
 
-      - name: Verify Docker availability
-        run: docker info
+      - name: Test suite (unittest)
+        run: python -m unittest discover -p "test_*.py"
 
-      - name: Run hard-gated, three-runtime proof
-        run: |
-          chmod +x run_all.sh setup_sandbox.sh
-          BUILD_SANDBOX=1 ./run_all.sh
+      - name: Deterministic ledger + tamper detection
+        run: python agent_ledger.py
+
+      - name: Clearance gate demonstration
+        run: python policy_gate_demo.py
+
+      - name: Forgery / anchor detection
+        run: python forgery_demo.py
+
+      - name: C# independent re-derivation (cross-runtime)
+        run: dotnet run --project xrt_verify -- agent_ledger.jsonl
+
+      - name: Node independent re-derivation (cross-runtime)
+        run: node verify.js agent_ledger.jsonl
